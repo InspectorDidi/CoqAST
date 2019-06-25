@@ -10,6 +10,11 @@ open Univ
 
 module CRD = Context.Rel.Declaration
 
+
+module StringMap = Map.Make(String)
+let var_dict = ref (StringMap.empty)
+let counter = ref 0
+
 (*
  * Plugin to print an s-expression representing the (possibly expanded) AST for a definition.
  * Based on TemplateCoq: https://github.com/gmalecha/template-coq/blob/master/src/reify.ml4
@@ -25,13 +30,12 @@ module CRD = Context.Rel.Declaration
  * Toggles between DeBruijn indexing and names
  *)
 let opt_debruijn = ref (false)
-let _ = Goptions.declare_bool_option {
-  Goptions.optdepr = false;
-  Goptions.optname = "DeBruijn indexing in PrintAST";
+let _ = Goptions.declare_bool_option {Goptions.optdepr = false; Goptions.optname = "DeBruijn indexing in PrintAST";
   Goptions.optkey = ["PrintAST"; "Indexing"];
   Goptions.optread = (fun () -> !opt_debruijn);
   Goptions.optwrite = (fun b -> opt_debruijn := b);
 }
+
 
 let is_debruijn () = !opt_debruijn
 
@@ -102,13 +106,46 @@ let rec range (min : int) (max : int) =
  * Names are assigned to new bindings and can be retrieved by indexes from an environment
  *)
 
+let dict_length (d : string StringMap.t) =
+  StringMap.fold (fun k x y -> y + 1) d 0
+
+let gen_next_name =
+  fun () -> counter := !counter + 1;
+            "gen_var_" ^ (string_of_int !counter)(* (dict_length !var_dict) *)
+
+let update_var_dict (n : Name.t) =
+  let name_string =
+        match n with
+          Name id -> Id.to_string id
+        | Anonymous -> "fdsa"
+  in
+  var_dict := StringMap.add name_string (gen_next_name ()) !var_dict
+
+
+let mult_update_var_dict (ns : Name.t array) =
+  List.map
+    (fun i ->
+      (let name_string =
+        match (Array.get ns i) with
+          Name id -> Id.to_string id
+        | Anonymous -> "fdsa"
+       in
+       var_dict := StringMap.add name_string (gen_next_name ()) !var_dict))
+  (range 0 (Array.length ns)); ()
+
+
 (*
  * Build an AST for a name
  *)
+
 let build_name (n : Name.t) =
   match n with
-    Name id -> build "Name" [Id.to_string id]
-  | Anonymous -> "(Anonymous)"
+    Name id -> let str = Id.to_string id in
+               if (StringMap.mem str !var_dict)
+                 then (StringMap.find str !var_dict)
+                 else str
+                (* build "Name" [Id.to_string id] *)
+  | Anonymous -> "Anonymous"
 
 
 (* --- Variables --- *)
@@ -250,7 +287,7 @@ let build_sort (s : Sorts.t) =
   let s_ast =
     match s with
     | Prop _ -> if s = Sorts.prop then "Prop" else "Set"
-    | Type u -> build "Type" [build_universe u]
+    | Type u -> "Type" (* build "Type" [build_universe u] *)
   in build "Sort" [s_ast]
 
 (* --- Casts --- *)
@@ -295,13 +332,13 @@ let build_cast (trm_ast : string) (kind : cast_kind) (typ_ast : string) =
  * Build the AST for a product
  *)
 let build_product (n : Name.t) (typ_ast : string) (body_ast : string) =
-  build "Prod" [build_name n; typ_ast; body_ast]
+  build "Prod" (* [typ_ast; body_ast] *) [build_name n; typ_ast; body_ast]
 
 (*
  * Build the AST for a lambda
  *)
 let build_lambda (n : Name.t) (typ_ast : string) (body_ast : string) =
-  build "Lambda" [build_name n; typ_ast; body_ast]
+  build "Lambda" [typ_ast; body_ast] (* [build_name n; typ_ast; body_ast] *)
 
 (* --- Let --- *)
 
@@ -351,6 +388,7 @@ let build_kername (kn : KerName.t) =
 (*
  * Get the definition for a constant, forcing it to a Constr
  *)
+
 let get_definition (cd : Declarations.constant_body) =
  match cd.const_body with
    Undef _ ->
@@ -363,6 +401,7 @@ let get_definition (cd : Declarations.constant_body) =
 (*
  * Build the AST for an axiom, which is a constant with no associated body
  *)
+(*
 let build_axiom (kn : KerName.t) (typ_ast : string) (u : Instance.t) =
   let kn' = build_kername kn in
   if show_universes () then
@@ -370,15 +409,30 @@ let build_axiom (kn : KerName.t) (typ_ast : string) (u : Instance.t) =
   else
     build "Axiom" [kn'; typ_ast]
 
+ *)
+
+let build_axiom (kn : KerName.t) =
+  let kn' = build_kername kn in
+  build "Axiom" [kn']
+
+
 (*
  * Build the AST for a definition
  *)
+
+(*
+let build_definition (kn : KerName.t) =
+   let kn' = build_kername kn in
+   build "Definition" [kn']
+ *)
+
 let build_definition (kn : KerName.t) (typ_ast : string) (u : Instance.t) =
    let kn' = build_kername kn in
    if show_universes () then
      build "Definition" [kn'; typ_ast; build_universe_instance u]
    else
      build "Definition" [kn'; typ_ast]
+
 
 (* --- Fixpoints --- *)
 
@@ -407,7 +461,8 @@ let bindings_for_fix (names : Name.t array) (typs : constr array) =
  * Build the AST for a function in a fixpoint
  *)
 let build_fix_fun (index : int) (n : Name.t) (typ_ast : string) (body_ast : string) =
-  build (build_name n) [string_of_int index; typ_ast; body_ast]
+  (* build (build_name n) [string_of_int index; typ_ast; body_ast] *)
+  build "App" [build_name n; string_of_int index; typ_ast; body_ast]
 
 (*
  * Build the AST for a fixpoint
@@ -546,8 +601,12 @@ let build_case (info : case_info) (case_typ_ast : string) (match_ast : string) (
 let build_proj (p_const_ast : string) (c_ast : string) =
   build "Proj" [p_const_ast; c_ast]
 
-(* --- Full AST --- *)
+let kn_list : string list ref = ref []
 
+let concat (l : string list) : string =
+  List.fold_right (^) l ""
+
+(* --- Full AST --- *)
 let rec build_ast (env : env) (depth : int) (trm : types) =
   match kind trm with
     Rel i ->
@@ -566,18 +625,21 @@ let rec build_ast (env : env) (depth : int) (trm : types) =
       let t' = build_ast env depth t in
       build_cast c' k t'
   | Prod (n, t, b) ->
-      let t' = build_ast env depth t in
+      update_var_dict n;
+      (let t' = build_ast env depth t in
       let b' = build_ast (push_rel CRD.(LocalAssum(n, t)) env) depth b in
-      build_product n t' b'
+      build_product n t' b')
   | Lambda (n, t, b) ->
-      let t' = build_ast env depth t in
+      update_var_dict n;
+      (let t' = build_ast env depth t in
       let b' = build_ast (push_rel CRD.(LocalAssum(n, t)) env) depth b in
-      build_lambda n t' b'
+      build_lambda n t' b')
   | LetIn (n, trm, typ, b) ->
-      let trm' = build_ast env depth trm in
+      update_var_dict n;
+      (let trm' = build_ast env depth trm in
       let typ' = build_ast env depth typ in
       let b' = build_ast (push_rel CRD.(LocalDef(n, b, typ)) env) depth b in
-      build_let_in n trm' typ' b'
+      build_let_in n trm' typ' b')
   | App (f, xs) ->
       let f' = build_ast env depth f in
       let xs' = List.map (build_ast env depth) (Array.to_list xs) in
@@ -585,8 +647,17 @@ let rec build_ast (env : env) (depth : int) (trm : types) =
   | Const (c, u) ->
       build_const env depth (c, u)
   | Construct ((i, c_index), u) ->
-      let i' = build_ast env depth (mkInd i) in
-      build_constructor i' c_index u
+      let (i', m_index) = i in
+      let mutind_body = lookup_mutind_body i' env in
+      let ind_bodies = mutind_body.mind_packets in
+      let ind_body = (Array.get ind_bodies m_index) in
+      let constructors = ind_body.mind_consnames in
+      let constructor = Array.get constructors (c_index-1) in
+      Id.to_string constructor
+     (*
+       let i' = build_ast env depth (mkInd i) in
+       build_constructor i' c_index u
+      *)
   | Ind ((i, i_index), u) ->
       build_minductive env depth ((i, i_index), u)
   | Case (ci, ct, m, bs) ->
@@ -595,8 +666,10 @@ let rec build_ast (env : env) (depth : int) (trm : types) =
       let branches = List.map (build_ast env depth) (Array.to_list bs) in
       build_case ci typ match_typ branches
   | Fix ((is, i), (ns, ts, ds)) ->
+      mult_update_var_dict ns;
       build_fix (build_fixpoint_functions env depth ns ts ds) i
   | CoFix (i, (ns, ts, ds)) ->
+      mult_update_var_dict ns;
       build_cofix (build_fixpoint_functions env depth ns ts ds) i
   | Proj (p, c) ->
       let p' = build_ast env depth (mkConst (Projection.constant p)) in
@@ -607,12 +680,33 @@ and build_const (env : env) (depth : int) ((c, u) : pconstant) =
   let kn = Constant.canonical c in
   let cd = lookup_constant c env in
   let global_env = Global.env () in
+  let ty = cd.const_type in
   match get_definition cd with
   | None ->
-     let ty = cd.const_type in
-     build_axiom kn (build_ast global_env (depth - 1) ty) u
+  (* build_axiom kn (build_ast global_env (depth - 1) ty) u *)
+    build_axiom kn
   | Some c ->
-     build_definition kn (build_ast global_env (depth - 1) c) u
+    let kername = build_kername kn in
+    if (depth <= 0)
+    then
+      (* build_axiom kn (build_ast global_env (depth - 1) ty) u *)
+        kername
+    else
+      if (List.mem kername !kn_list)
+      then kername
+      else
+        ((kn_list := kername :: !kn_list);
+         (*
+         if (String.equal (build_sort (Typeops.infer_type env ty).utj_type) "(Sort Prop)")
+         then (print ((build_definition kn (build_ast global_env (depth - 1) c) u) ^ " "); kername)
+         else kername
+          *)
+        (print ((build_definition kn (build_ast global_env (depth - 1) c) u) ^ " "); kername)
+        )
+
+(* print (concat !kn_list); *)
+(* else (build_definition kn (build_ast global_env (depth - 1) c) u) *)
+
 
 and build_fixpoint_functions (env : env) (depth : int) (names : Name.t array) (typs : constr array) (defs : constr array)  =
   let env_fix = push_rel_context (bindings_for_fix names typs) env in
@@ -633,44 +727,55 @@ and build_oinductive (env : env) (depth : int) (ind_body : one_inductive_body) =
 and build_minductive (env : env) (depth : int) (((i, i_index), u) : pinductive) =
   let mutind_body = lookup_mutind_body i env in
   let ind_bodies = mutind_body.mind_packets in
-  if depth <= 0 then (* don't expand *)
-    build_inductive_name (Array.get ind_bodies i_index)
-  else (* expand *)
-    let ind_bodies_list = Array.to_list ind_bodies in
-    let env_ind = push_rel_context (bindings_for_inductive env mutind_body ind_bodies_list) env in
-    let cs = List.map (build_oinductive env_ind depth) ind_bodies_list in
-    let ind_or_coind = mutind_body.mind_finite in
-    build_inductive ind_or_coind cs u
+  let ind_body = (Array.get ind_bodies i_index) in
+  build_inductive_name ind_body
 
 (* --- Top-level functionality --- *)
+
+let const_sort (env : env) (depth : int) ((c, u) : pconstant) =
+  let kn = Constant.canonical c in
+  let cd = lookup_constant c env in
+  let global_env = Global.env () in
+  cd.const_type
 
 (*
  * Apply a function to a definition up to a certain depth
  * That is, always unfold the first constant or inductive definition
  *)
-let apply_to_definition (f : env -> int -> types -> 'a) (env : env) (depth : int) (body : types) =
+let apply_to_definition (f : env -> int -> types -> 'a) (env : env) (depth : int) (body : types)  =
   match (kind body) with
   | Const _ ->
-      f env (depth + 1) body
+  (* f env (depth + 1) body *)
+     f env depth body
   | Ind _ ->
-      f env (depth + 1) body
+  (* f env (depth + 1) body *)
+     f env depth body
   | _ ->
       f env depth body
 
+let print_dict =
+  fun () -> StringMap.iter (fun k x -> print_string(k ^ " " ^ x ^ "\n")) !var_dict
+
 (* Top-level print AST functionality *)
 let print_ast (depth : int) (def : Constrexpr.constr_expr) : unit =
+  (* let var_dict = StringMap.add "fdsa" "asdf" StringMap.empty in *)
   let (evm, env) = Pfedit.get_current_context () in
   let (ebody, _) = Constrintern.interp_constr env evm def in
   let body = EConstr.to_constr evm ebody in
   let ast = apply_to_definition build_ast env depth body in
-  print ast
+  (* let remove_last_word (s : string) = String.sub s 0 (String.rindex s ' ') in *)
+  print "";
+  (* (print_dict ()); *)
+  (kn_list := []);
+  (var_dict := StringMap.empty);
+  (counter := 0)
+
 
 (* PrintAST command
    The depth specifies the depth at which to unroll nested type definitions *)
 VERNAC COMMAND EXTEND Print_AST CLASSIFIED AS SIDEFF
 | [ "PrintAST" constr(def) ] ->
-  [ print_ast 0 def ]
+  [ print_ast 1 def ]
 | [ "PrintAST" constr(def) "with" "depth" integer(depth)] ->
   [ print_ast depth def ]
 END
-
