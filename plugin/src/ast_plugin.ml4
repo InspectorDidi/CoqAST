@@ -10,19 +10,57 @@ open Univ
 
 module CRD = Context.Rel.Declaration
 
-
-module StringMap = Map.Make(String)
-let var_dict = ref (StringMap.empty)
-let counter = ref 0
-
 (*
  * Plugin to print an s-expression representing the (possibly expanded) AST for a definition.
  * Based on TemplateCoq: https://github.com/gmalecha/template-coq/blob/master/src/reify.ml4
  *
- * Consider this plugin a learning tool to help understand how to traverse the AST, which is why it is extensively commented.
- * It's also why even simple functions are highly separated out instead of nested, which is not typical OCaml style.
- * Feel free to fork it and mess around with the functions to see what happens.
  *)
+
+(* Map from original variable names to converted variable names.
+ * Purpose is give variables fresh names when bound by a Lambda constructor
+ *)
+module StringMap = Map.Make(String)
+let var_dict = ref (StringMap.empty)
+let counter = ref 0
+
+let dict_length (d : string StringMap.t) =
+  StringMap.fold (fun k x y -> y + 1) d 0
+
+let gen_next_name =
+  fun () -> counter := !counter + 1;
+            "gen_var_" ^ (string_of_int !counter)(* (dict_length !var_dict) *)
+
+let update_var_dict (n : Name.t) =
+  let name_string =
+        match n with
+          Name id -> Id.to_string id
+        | Anonymous -> "fdsa"
+  in
+  var_dict := StringMap.add name_string (gen_next_name ()) !var_dict
+
+(*
+ * Creates a list so we can map over the range of a to b
+ * This is an auxliary function renamed from seq in template-coq
+ *)
+let rec range (min : int) (max : int) =
+  if min < max then
+    min :: range (min + 1) max
+  else
+    []
+
+let mult_update_var_dict (ns : Name.t array) =
+  List.map
+    (fun i ->
+      (let name_string =
+        match (Array.get ns i) with
+          Name id -> Id.to_string id
+        | Anonymous -> "fdsa"
+       in
+       var_dict := StringMap.add name_string (gen_next_name ()) !var_dict))
+  (range 0 (Array.length ns)); ()
+
+
+
 
 (* --- Options --- *)
 
@@ -86,18 +124,6 @@ let wrap (s : string) =
 let build (node : string) (leaves : string list) =
   wrap (String.concat " " (node :: leaves))
 
-(* --- Other helper functions --- *)
-
-(*
- * Creates a list so we can map over the range of a to b
- * This is an auxliary function renamed from seq in template-coq
- *)
-let rec range (min : int) (max : int) =
-  if min < max then
-    min :: range (min + 1) max
-  else
-    []
-
 (* --- Names --- *)
 
 (*
@@ -106,36 +132,10 @@ let rec range (min : int) (max : int) =
  * Names are assigned to new bindings and can be retrieved by indexes from an environment
  *)
 
-let dict_length (d : string StringMap.t) =
-  StringMap.fold (fun k x y -> y + 1) d 0
-
-let gen_next_name =
-  fun () -> counter := !counter + 1;
-            "gen_var_" ^ (string_of_int !counter)(* (dict_length !var_dict) *)
-
-let update_var_dict (n : Name.t) =
-  let name_string =
-        match n with
-          Name id -> Id.to_string id
-        | Anonymous -> "fdsa"
-  in
-  var_dict := StringMap.add name_string (gen_next_name ()) !var_dict
-
-
-let mult_update_var_dict (ns : Name.t array) =
-  List.map
-    (fun i ->
-      (let name_string =
-        match (Array.get ns i) with
-          Name id -> Id.to_string id
-        | Anonymous -> "fdsa"
-       in
-       var_dict := StringMap.add name_string (gen_next_name ()) !var_dict))
-  (range 0 (Array.length ns)); ()
-
 
 (*
  * Build an AST for a name
+ * Grab name from fresh variable dictionary
  *)
 
 let build_name (n : Name.t) =
@@ -282,6 +282,7 @@ let build_universe_instance (i : Instance.t) =
 
 (*
  * Build the AST for a sort
+ * outputs "Sort Prop", "Sort Set", or "Sort Type"
  *)
 let build_sort (s : Sorts.t) =
   let s_ast =
@@ -330,15 +331,17 @@ let build_cast (trm_ast : string) (kind : cast_kind) (typ_ast : string) =
 
 (*
  * Build the AST for a product
+ * Switch comment placement to remove name
  *)
 let build_product (n : Name.t) (typ_ast : string) (body_ast : string) =
   build "Prod" (* [typ_ast; body_ast] *) [build_name n; typ_ast; body_ast]
 
 (*
  * Build the AST for a lambda
+ * Switch comment placement to remove name
  *)
 let build_lambda (n : Name.t) (typ_ast : string) (body_ast : string) =
-  build "Lambda" [typ_ast; body_ast] (* [build_name n; typ_ast; body_ast] *)
+  build "Lambda" (* [typ_ast; body_ast] *) [build_name n; typ_ast; body_ast]
 
 (* --- Let --- *)
 
@@ -401,6 +404,7 @@ let get_definition (cd : Declarations.constant_body) =
 (*
  * Build the AST for an axiom, which is a constant with no associated body
  *)
+
 (*
 let build_axiom (kn : KerName.t) (typ_ast : string) (u : Instance.t) =
   let kn' = build_kername kn in
@@ -408,8 +412,7 @@ let build_axiom (kn : KerName.t) (typ_ast : string) (u : Instance.t) =
     build "Axiom" [kn'; typ_ast; build_universe_instance u]
   else
     build "Axiom" [kn'; typ_ast]
-
- *)
+*)
 
 let build_axiom (kn : KerName.t) =
   let kn' = build_kername kn in
@@ -683,19 +686,18 @@ and build_const (env : env) (depth : int) ((c, u) : pconstant) =
   let ty = cd.const_type in
   match get_definition cd with
   | None ->
-  (* build_axiom kn (build_ast global_env (depth - 1) ty) u *)
     build_axiom kn
   | Some c ->
     let kername = build_kername kn in
     if (depth <= 0)
     then
-      (* build_axiom kn (build_ast global_env (depth - 1) ty) u *)
         kername
     else
       if (List.mem kername !kn_list)
       then kername
       else
         ((kn_list := kername :: !kn_list);
+         (* Uncomment to print only Propositions *)
          (*
          if (String.equal (build_sort (Typeops.infer_type env ty).utj_type) "(Sort Prop)")
          then (print ((build_definition kn (build_ast global_env (depth - 1) c) u) ^ " "); kername)
@@ -705,8 +707,6 @@ and build_const (env : env) (depth : int) ((c, u) : pconstant) =
         )
 
 (* print (concat !kn_list); *)
-(* else (build_definition kn (build_ast global_env (depth - 1) c) u) *)
-
 
 and build_fixpoint_functions (env : env) (depth : int) (names : Name.t array) (typs : constr array) (defs : constr array)  =
   let env_fix = push_rel_context (bindings_for_fix names typs) env in
@@ -745,27 +745,22 @@ let const_sort (env : env) (depth : int) ((c, u) : pconstant) =
 let apply_to_definition (f : env -> int -> types -> 'a) (env : env) (depth : int) (body : types)  =
   match (kind body) with
   | Const _ ->
-  (* f env (depth + 1) body *)
      f env depth body
   | Ind _ ->
-  (* f env (depth + 1) body *)
      f env depth body
   | _ ->
-      f env depth body
+     f env depth body
 
 let print_dict =
   fun () -> StringMap.iter (fun k x -> print_string(k ^ " " ^ x ^ "\n")) !var_dict
 
 (* Top-level print AST functionality *)
 let print_ast (depth : int) (def : Constrexpr.constr_expr) : unit =
-  (* let var_dict = StringMap.add "fdsa" "asdf" StringMap.empty in *)
   let (evm, env) = Pfedit.get_current_context () in
   let (ebody, _) = Constrintern.interp_constr env evm def in
   let body = EConstr.to_constr evm ebody in
   let ast = apply_to_definition build_ast env depth body in
-  (* let remove_last_word (s : string) = String.sub s 0 (String.rindex s ' ') in *)
   print "";
-  (* (print_dict ()); *)
   (kn_list := []);
   (var_dict := StringMap.empty);
   (counter := 0)
