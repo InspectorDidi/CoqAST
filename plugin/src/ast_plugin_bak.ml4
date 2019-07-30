@@ -26,10 +26,10 @@ module StringMap = Map.Make(String)
 let var_dict = ref (StringMap.empty)
 let counter = ref 0
 
-let glob_mod_libs = ref false
-
 let dict_length (d : string StringMap.t) =
   StringMap.fold (fun k x y -> y + 1) d 0
+
+let lib_list = ref ([]:string list)
 
 let gen_next_name =
   fun () -> counter := !counter + 1;
@@ -69,6 +69,8 @@ let string_contains (s1 : string) (s2 : string) =
     if (String.length s1 < s2_len)
     then false
     else String.equal (String.sub s1 0 s2_len) s2
+
+let any (l : bool list) = List.fold_right (fun x y -> x || y) l false
 
 
 (* --- Options --- *)
@@ -698,18 +700,26 @@ and build_const (env : env) (depth : int) ((c, u) : pconstant) =
     build_axiom kn
   | Some c ->
     let kername = build_kername kn in
-    if (depth <= 0) || (!glob_mod_libs && (string_contains kername "Coq.")) || (List.mem kername !kn_list)
+    if (depth <= 0)
     then
         kername
     else
-      ((kn_list := kername :: !kn_list);
-       (* Uncomment to print only Propositions *)
-       (*
-       if (String.equal (build_sort (Typeops.infer_type env ty).utj_type) "(Sort Prop)")
-       then (print ((build_definition kn (build_ast global_env (depth - 1) c) u) ^ " "); kername)
-       else kername
-        *)
-      (print ((build_definition kn (build_ast global_env (depth - 1) c) u) ^ " "); kername))
+      if (any (List.map (fun y -> string_contains kername y) !lib_list))
+      then (print "hi!"; kername)
+      else
+        ((List.iter print_bool (List.map (fun y -> string_contains kername y) !lib_list));
+        if (List.mem kername !kn_list)
+        then kername
+        else
+          ((kn_list := kername :: !kn_list);
+           (* Uncomment to print only Propositions *)
+           (*
+           if (String.equal (build_sort (Typeops.infer_type env ty).utj_type) "(Sort Prop)")
+           then (print ((build_definition kn (build_ast global_env (depth - 1) c) u) ^ " "); kername)
+           else kername
+            *)
+          (print ((build_definition kn (build_ast global_env (depth - 1) c) u) ^ " "); kername)
+          ))
 
 (* print (concat !kn_list); *)
 
@@ -765,7 +775,10 @@ let print_ast (depth : int) (def : Constrexpr.constr_expr) (mod_libs : bool) : u
   let (evm, env) = Pfedit.get_current_context () in
   let (ebody, _) = Constrintern.interp_constr env evm def in
   let body = EConstr.to_constr evm ebody in
-  ((glob_mod_libs := mod_libs);
+  ((if mod_libs
+   then (lib_list := List.map Names.DirPath.to_string (Library.loaded_libraries ()))
+    else (lib_list := []);
+   List.iter print !lib_list);
   let ast = apply_to_definition build_ast env depth body in
   print "";
   (* print Library. *)

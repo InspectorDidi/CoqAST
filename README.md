@@ -14,7 +14,7 @@ For example:
 
 ## Differences from the original
 
-The purpose of this fork is provide a version of Coq proof trees that is especially amenable to proof tree analysis in the project https://github.com/scottviteri/ManipulateProofTrees. The specific changes are listed below:
+CThe purpose of this fork is provide a version of Coq proof trees that is especially amenable to proof tree analysis in the project https://github.com/scottviteri/ManipulateProofTrees. The specific changes are listed below:
 
  1. Variables are given fresh names when bound by a Lambda, Prod, or LetIn constructors.
     This prevents naming collisions that would normally be handled by Gallina alpha renaming.
