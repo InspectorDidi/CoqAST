@@ -1,0 +1,7 @@
+
+S plugin/src
+B /home/scottviteri/LocalSoftware/coq-8.8.2/kernel
+B /home/scottviteri/LocalSoftware/coq-8.8.2/checker
+B /home/scottviteri/LocalSoftware/coq-8.8.2/*
+FLG -rectypes
+EXT lwt

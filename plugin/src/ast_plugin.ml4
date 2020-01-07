@@ -143,14 +143,14 @@ let build (node : string) (leaves : string list) =
 
 
 (*
- * Build an AST for a name
+ * Build an AST for a namestr
  * Grab name from fresh variable dictionary
  *)
 
 let build_name (n : Name.t) =
   match n with
     Name id -> let str = Id.to_string id in
-               if (StringMap.mem str !var_dict)
+                 if (StringMap.mem str !var_dict)
                  then (StringMap.find str !var_dict)
                  else str
                 (* build "Name" [Id.to_string id] *)
@@ -618,6 +618,28 @@ let kn_list : string list ref = ref []
 let concat (l : string list) : string =
   List.fold_right (^) l ""
 
+let rec rename_vars (trm : types) (var_dict : StringMap)=
+  match kind trm with
+  | Rel i -> Rel i
+  | Prod (n, t, b) ->
+      update_var_dict n;
+      (let t' = build_ast env depth t in
+      let b' = build_ast (push_rel CRD.(LocalAssum(n, t)) env) depth b in
+      build_product n t' b')
+  | Lambda (n, t, b) ->
+      (let t' = build_ast env depth t in
+      (update_var_dict n;
+       (* let b' = build_ast (push_rel CRD.(LocalAssum(n, t)) env) depth b in *)
+      build_lambda n t' (build_ast (push_rel CRD.(LocalAssum(n, t)) env) depth b)))
+  | LetIn (n, trm, typ, b) ->
+      update_var_dict n;
+      (let trm' = build_ast env depth trm in
+      let typ' = build_ast env depth typ in
+      let b' = build_ast (push_rel CRD.(LocalDef(n, b, typ)) env) depth b in
+      build_let_in n trm' typ' b')
+
+  | _ -> trm
+
 (* --- Full AST --- *)
 let rec build_ast (env : env) (depth : int) (trm : types) =
   match kind trm with
@@ -642,10 +664,10 @@ let rec build_ast (env : env) (depth : int) (trm : types) =
       let b' = build_ast (push_rel CRD.(LocalAssum(n, t)) env) depth b in
       build_product n t' b')
   | Lambda (n, t, b) ->
-      update_var_dict n;
       (let t' = build_ast env depth t in
-      let b' = build_ast (push_rel CRD.(LocalAssum(n, t)) env) depth b in
-      build_lambda n t' b')
+      (update_var_dict n;
+       (* let b' = build_ast (push_rel CRD.(LocalAssum(n, t)) env) depth b in *)
+      build_lambda n t' (build_ast (push_rel CRD.(LocalAssum(n, t)) env) depth b)))
   | LetIn (n, trm, typ, b) ->
       update_var_dict n;
       (let trm' = build_ast env depth trm in
@@ -740,7 +762,7 @@ and build_minductive (env : env) (depth : int) (((i, i_index), u) : pinductive) 
 let const_sort (env : env) (depth : int) ((c, u) : pconstant) =
   let kn = Constant.canonical c in
   let cd = lookup_constant c env in
-  let global_env = Global.env () in
+  (* let global_env = Global.env () in *)
   cd.const_type
 
 (*
@@ -758,7 +780,7 @@ let apply_to_definition (f : env -> int -> types -> 'a) (env : env) (depth : int
 
 let print_dict =
   fun () -> StringMap.iter (fun k x -> print_string(k ^ " " ^ x ^ "\n")) !var_dict
-
+Environ.env
 
 (* Top-level print AST functionality *)
 let print_ast (depth : int) (def : Constrexpr.constr_expr) (mod_libs : bool) : unit =
@@ -776,6 +798,7 @@ let print_ast (depth : int) (def : Constrexpr.constr_expr) (mod_libs : bool) : u
 
 (* PrintAST command
    The depth specifies the depth at which to unroll nested type definitions *)
+
 VERNAC COMMAND EXTEND Print_AST CLASSIFIED AS SIDEFF
 | [ "PrintAST" constr(def) ] ->
   [ print_ast 1 def false]
