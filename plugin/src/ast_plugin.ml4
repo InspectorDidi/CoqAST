@@ -23,25 +23,12 @@ module CRD = Context.Rel.Declaration
  * Purpose is give variables fresh names when bound by a Lambda constructor
  *)
 module StringMap = Map.Make(String)
-let var_dict = ref (StringMap.empty)
-let counter = ref 0
 
 let glob_mod_libs = ref false
 
 let dict_length (d : string StringMap.t) =
   StringMap.fold (fun k x y -> y + 1) d 0
 
-let gen_next_name =
-  fun () -> counter := !counter + 1;
-            "gen_var_" ^ (string_of_int !counter)(* (dict_length !var_dict) *)
-
-let update_var_dict (n : Name.t) =
-  let name_string =
-        match n with
-          Name id -> Id.to_string id
-        | Anonymous -> "fdsa"
-  in
-  var_dict := StringMap.add name_string (gen_next_name ()) !var_dict
 
 (*
  * Creates a list so we can map over the range of a to b
@@ -52,17 +39,6 @@ let rec range (min : int) (max : int) =
     min :: range (min + 1) max
   else
     []
-
-let mult_update_var_dict (ns : Name.t array) =
-  List.map
-    (fun i ->
-      (let name_string =
-        match (Array.get ns i) with
-          Name id -> Id.to_string id
-        | Anonymous -> "fdsa"
-       in
-       var_dict := StringMap.add name_string (gen_next_name ()) !var_dict))
-  (range 0 (Array.length ns)); ()
 
 let string_contains (s1 : string) (s2 : string) =
   let s2_len = String.length s2 in
@@ -82,7 +58,6 @@ let _ = Goptions.declare_bool_option {Goptions.optdepr = false; Goptions.optname
   Goptions.optread = (fun () -> !opt_debruijn);
   Goptions.optwrite = (fun b -> opt_debruijn := b);
 }
-
 
 let is_debruijn () = !opt_debruijn
 
@@ -141,7 +116,6 @@ let build (node : string) (leaves : string list) =
  * Names are assigned to new bindings and can be retrieved by indexes from an environment
  *)
 
-
 (*
  * Build an AST for a namestr
  * Grab name from fresh variable dictionary
@@ -150,9 +124,7 @@ let build (node : string) (leaves : string list) =
 let build_name (n : Name.t) =
   match n with
     Name id -> let str = Id.to_string id in
-                 if (StringMap.mem str !var_dict)
-                 then (StringMap.find str !var_dict)
-                 else str
+               str
                 (* build "Name" [Id.to_string id] *)
   | Anonymous -> "Anonymous"
 
@@ -618,30 +590,74 @@ let kn_list : string list ref = ref []
 let concat (l : string list) : string =
   List.fold_right (^) l ""
 
-let rec rename_vars (trm : types) (var_dict : StringMap)=
-  match kind trm with
-  | Rel i -> Rel i
-  | Prod (n, t, b) ->
-      update_var_dict n;
-      (let t' = build_ast env depth t in
-      let b' = build_ast (push_rel CRD.(LocalAssum(n, t)) env) depth b in
-      build_product n t' b')
-  | Lambda (n, t, b) ->
-      (let t' = build_ast env depth t in
-      (update_var_dict n;
-       (* let b' = build_ast (push_rel CRD.(LocalAssum(n, t)) env) depth b in *)
-      build_lambda n t' (build_ast (push_rel CRD.(LocalAssum(n, t)) env) depth b)))
-  | LetIn (n, trm, typ, b) ->
-      update_var_dict n;
-      (let trm' = build_ast env depth trm in
-      let typ' = build_ast env depth typ in
-      let b' = build_ast (push_rel CRD.(LocalDef(n, b, typ)) env) depth b in
-      build_let_in n trm' typ' b')
+let to_string (n : Names.Name.t) =
+  match n with
+  | Name m -> Id.to_string m
+  | Anonymous -> "out"
 
-  | _ -> trm
+let to_name (s : string) : Names.Name.t =
+  Names.Name (Id.of_string s)
+
+let rec rename_vars (trm : types) (var_dict : string StringMap.t) =
+  let num_vars = dict_length var_dict in
+  match kind trm with
+  | Var v ->
+     (let n = Id.to_string v in
+      if (StringMap.mem n var_dict)
+      then (Constr.mkVar (Id.of_string (StringMap.find n var_dict)))
+      else (Constr.mkVar (Id.of_string "hi")))
+  | Prod (n, t, b) ->
+      (let n' = "get_var_"^(string_of_int (num_vars+1)) in
+       let new_dict = (StringMap.add
+                         (to_string n)
+                         n'
+                         var_dict) in
+       Constr.mkProd(to_name n',t,rename_vars b new_dict))
+  | Lambda (n, t, b) ->
+      (let n' = "get_var_"^(string_of_int (num_vars+1)) in
+       let new_dict = (StringMap.add
+                         (to_string n)
+                         n'
+                         var_dict) in
+       Constr.mkLambda(to_name n',t,(rename_vars b new_dict)))
+  | LetIn (n, trm, typ, b) ->
+      (let n' = "get_var_"^(string_of_int (num_vars+1)) in
+       let new_dict = (StringMap.add
+                         (to_string n)
+                         n'
+                         var_dict) in
+       Constr.mkLetIn(to_name n',trm,typ,(rename_vars b new_dict)))
+(*  | Fix ((is, i), (ns, ts, ds)) ->
+      mult_update_var_dict ns;
+      Constr.mkFix (build_fixpoint_functions env depth ns ts ds) i
+  | CoFix (i, (ns, ts, ds)) ->
+      mult_update_var_dict ns;
+      build_cofix (build_fixpoint_functions env depth ns ts ds) i
+ *)
+  | Rel i -> trm
+  | Meta mv -> trm
+  | Evar (k, cs) -> Constr.mkEvar (k, Array.map (fun x -> rename_vars x var_dict) cs)
+  | Sort s -> trm
+  | Cast (c, k, t) -> Constr.mkCast (rename_vars c var_dict, k, rename_vars t var_dict)
+  | App (f, xs) -> Constr.mkApp (rename_vars f var_dict, Array.map (fun x -> rename_vars x var_dict) xs)
+  | Const (c, u) -> Constr.mkConst c
+  | Construct ((i, c_index), u) -> trm
+  | Ind ((i, i_index), u) -> trm
+  | Case (ci, ct, m, bs) ->
+     Constr.mkCase (ci, rename_vars ct var_dict, rename_vars m var_dict,
+                    Array.map (fun x -> rename_vars x var_dict) bs)
+  | Fix ((is, i), (ns, ts, ds)) ->
+     Constr.mkFix ((is, i), (ns, Array.map (fun x -> rename_vars x var_dict) ts,
+                                 Array.map (fun x -> rename_vars x var_dict) ds))
+  | CoFix (i, (ns, ts, ds)) ->
+     Constr.mkCoFix (i, (ns, Array.map (fun x -> rename_vars x var_dict) ts,
+                             Array.map (fun x -> rename_vars x var_dict) ds))
+  | Proj (p, c) ->
+     Constr.mkProj (p, rename_vars c var_dict)
+
 
 (* --- Full AST --- *)
-let rec build_ast (env : env) (depth : int) (trm : types) =
+let rec build_ast (env : env) (depth : int) (trm : types) (location : string) =
   match kind trm with
     Rel i ->
       build_rel env i
@@ -650,36 +666,39 @@ let rec build_ast (env : env) (depth : int) (trm : types) =
   | Meta mv ->
       build_meta mv
   | Evar (k, cs) ->
-      let cs' = List.map (build_ast env depth) (Array.to_list cs) in
+      let cs' = List.map (fun x -> build_ast env depth x location) (Array.to_list cs) in
       build_evar k cs'
   | Sort s ->
       build_sort s
   | Cast (c, k, t) ->
-      let c' = build_ast env depth c in
-      let t' = build_ast env depth t in
+      let c' = build_ast env depth c location in
+      let t' = build_ast env depth t location in
       build_cast c' k t'
   | Prod (n, t, b) ->
-      update_var_dict n;
-      (let t' = build_ast env depth t in
-      let b' = build_ast (push_rel CRD.(LocalAssum(n, t)) env) depth b in
-      build_product n t' b')
+      (let t' = build_ast env depth t location in
+       let new_location = location^"1" in
+       let new_name = to_name(to_string(n)^"_"^new_location) in
+      let b' = build_ast (push_rel CRD.(LocalAssum(new_name, t)) env) depth b new_location in
+      build_product new_name t' b')
   | Lambda (n, t, b) ->
-      (let t' = build_ast env depth t in
-      (update_var_dict n;
+      (let t' = build_ast env depth t location in
+       let new_location = location^"2" in
+       let new_name = to_name(to_string(n)^"_"^new_location) in
        (* let b' = build_ast (push_rel CRD.(LocalAssum(n, t)) env) depth b in *)
-      build_lambda n t' (build_ast (push_rel CRD.(LocalAssum(n, t)) env) depth b)))
+      build_lambda new_name t' (build_ast (push_rel CRD.(LocalAssum(new_name, t)) env) depth b new_location))
   | LetIn (n, trm, typ, b) ->
-      update_var_dict n;
-      (let trm' = build_ast env depth trm in
-      let typ' = build_ast env depth typ in
-      let b' = build_ast (push_rel CRD.(LocalDef(n, b, typ)) env) depth b in
-      build_let_in n trm' typ' b')
+      (let trm' = build_ast env depth trm location in
+      let typ' = build_ast env depth typ location in
+      let new_location = location^"3" in
+      let new_name = to_name(to_string(n)^"_"^new_location) in
+      let b' = build_ast (push_rel CRD.(LocalDef(new_name, b, typ)) env) depth b new_location in
+      build_let_in new_name trm' typ' b')
   | App (f, xs) ->
-      let f' = build_ast env depth f in
-      let xs' = List.map (build_ast env depth) (Array.to_list xs) in
+      let f' = build_ast env depth f location in
+      let xs' = List.map (fun x -> build_ast env depth x location) (Array.to_list xs) in
       build_app f' xs'
   | Const (c, u) ->
-      build_const env depth (c, u)
+      build_const env depth (c, u) location
   | Construct ((i, c_index), u) ->
       let (i', m_index) = i in
       let mutind_body = lookup_mutind_body i' env in
@@ -695,22 +714,20 @@ let rec build_ast (env : env) (depth : int) (trm : types) =
   | Ind ((i, i_index), u) ->
       build_minductive env depth ((i, i_index), u)
   | Case (ci, ct, m, bs) ->
-      let typ = build_ast env depth ct in
-      let match_typ = build_ast env depth m in
-      let branches = List.map (build_ast env depth) (Array.to_list bs) in
+      let typ = build_ast env depth ct location in
+      let match_typ = build_ast env depth m location in
+      let branches = List.map (fun x -> build_ast env depth x location) (Array.to_list bs) in
       build_case ci typ match_typ branches
   | Fix ((is, i), (ns, ts, ds)) ->
-      mult_update_var_dict ns;
-      build_fix (build_fixpoint_functions env depth ns ts ds) i
+      build_fix (build_fixpoint_functions env depth ns ts ds location) i
   | CoFix (i, (ns, ts, ds)) ->
-      mult_update_var_dict ns;
-      build_cofix (build_fixpoint_functions env depth ns ts ds) i
+      build_cofix (build_fixpoint_functions env depth ns ts ds location) i
   | Proj (p, c) ->
-      let p' = build_ast env depth (mkConst (Projection.constant p)) in
-      let c' = build_ast env depth c in
+      let p' = build_ast env depth (mkConst (Projection.constant p)) location in
+      let c' = build_ast env depth c location in
       build_proj p' c'
 
-and build_const (env : env) (depth : int) ((c, u) : pconstant) =
+and build_const (env : env) (depth : int) ((c, u) : pconstant) (location : string) =
   let kn = Constant.canonical c in
   let cd = lookup_constant c env in
   let global_env = Global.env () in
@@ -731,23 +748,23 @@ and build_const (env : env) (depth : int) ((c, u) : pconstant) =
        then (print ((build_definition kn (build_ast global_env (depth - 1) c) u) ^ " "); kername)
        else kername
         *)
-      (print ((build_definition kn (build_ast global_env (depth - 1) c) u) ^ " "); kername))
+      (print ((build_definition kn (build_ast global_env (depth - 1) c location) u) ^ " "); kername))
 
 (* print (concat !kn_list); *)
 
-and build_fixpoint_functions (env : env) (depth : int) (names : Name.t array) (typs : constr array) (defs : constr array)  =
+and build_fixpoint_functions (env : env) (depth : int) (names : Name.t array) (typs : constr array) (defs : constr array) (location : string) =
   let env_fix = push_rel_context (bindings_for_fix names typs) env in
   List.map
     (fun i ->
-      let typ = build_ast env depth (Array.get typs i) in
-      let def = build_ast env_fix depth (Array.get defs i) in
+      let typ = build_ast env depth (Array.get typs i) location in
+      let def = build_ast env_fix depth (Array.get defs i) location in
       build_fix_fun i (Array.get names i) typ def)
     (range 0 (Array.length names))
 
-and build_oinductive (env : env) (depth : int) (ind_body : one_inductive_body) =
+and build_oinductive (env : env) (depth : int) (ind_body : one_inductive_body) (location : string) =
   let constrs =
     List.map
-      (fun (i, (n, typ)) -> build (Id.to_string n) [i; build_ast env (depth - 1) typ])
+      (fun (i, (n, typ)) -> build (Id.to_string n) [i; build_ast env (depth - 1) typ location])
     (named_constructors ind_body)
   in build (build "Name" [Id.to_string ind_body.mind_typename]) [build_inductive_body constrs]
 
@@ -778,9 +795,8 @@ let apply_to_definition (f : env -> int -> types -> 'a) (env : env) (depth : int
   | _ ->
      f env depth body
 
-let print_dict =
-  fun () -> StringMap.iter (fun k x -> print_string(k ^ " " ^ x ^ "\n")) !var_dict
-Environ.env
+let print_dict (var_dict : string StringMap.t) =
+  StringMap.iter (fun k x -> print_string(k ^ " " ^ x ^ "\n")) var_dict
 
 (* Top-level print AST functionality *)
 let print_ast (depth : int) (def : Constrexpr.constr_expr) (mod_libs : bool) : unit =
@@ -788,12 +804,11 @@ let print_ast (depth : int) (def : Constrexpr.constr_expr) (mod_libs : bool) : u
   let (ebody, _) = Constrintern.interp_constr env evm def in
   let body = EConstr.to_constr evm ebody in
   ((glob_mod_libs := mod_libs);
-  let ast = apply_to_definition build_ast env depth body in
+   (*  let renamed_body = rename_vars body StringMap.empty in *)
+  let ast = apply_to_definition build_ast env depth body "" in
   print "";
   (* print Library. *)
-  (kn_list := []);
-  (var_dict := StringMap.empty);
-  (counter := 0))
+  (kn_list := []))
 
 
 (* PrintAST command
