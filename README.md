@@ -10,25 +10,20 @@ For example:
 
     Coq < PrintAST nat_ind.
 
-    (Definition Coq.Init.Datatypes.nat_ind (Lambda gen_var_1 (Prod gen_var_2 nat (Sort Prop)) (Lambda gen_var_4 (App gen_var_1 O) (Lambda gen_var_4 (Prod gen_var_5 nat (Prod Anonymous (App gen_var_1 gen_var_5) (App gen_var_1 (App S gen_var_5)))) (Fix (Functions (App gen_var_7 0 (Prod gen_var_8 nat (App gen_var_1 gen_var_8)) (Lambda gen_var_11 nat (Case 0 (Lambda gen_var_10 nat (App gen_var_1 gen_var_10)) (CaseMatch gen_var_10) (CaseBranches gen_var_4 (Lambda gen_var_11 nat (App gen_var_4 gen_var_11 (App gen_var_7 gen_var_11)))))))) 0)))))
+    (Definition Coq.Init.Datatypes.nat_ind (Lambda P_2 (Prod n_1 nat (Sort Prop)) (Lambda f_22 (App P_2 O) (Lambda f_222 (Prod n_221 nat (Prod out_2211 (App P_2 n_221) (App P_2 (App S n_221)))) (Fix (Functions (App F 0 (Prod n_2221 nat (App P_2 n_2221)) (Lambda n_2222 nat (Case 0 (Lambda n_22222 nat (App P_2 n_22222)) (CaseMatch n_2222) (CaseBranches f_22 (Lambda n_22222 nat (App f_222 n_22222 (App F n_22222)))))))) 0)))))
 
 ## Differences from the original
 
 The purpose of this fork is provide a version of Coq proof trees that is especially amenable to proof tree analysis in the project https://github.com/scottviteri/ManipulateProofTrees. The specific changes are listed below:
 
- 1. Variables are given fresh names when bound by a Lambda, Prod, or LetIn constructors.
-    This prevents naming collisions that would normally be handled by Gallina alpha renaming.
+ 1. Variables names are modified when bound by a Lambda (append 2), Prod (append 1), or LetIn (append 3) constructors.
+    This prevents two variables from having the same name in the same scope.
 
  2. Does not expand axioms or inductive types (still expands particular terms of an inductive type).
     These prevent the proof trees from exploding in size.
     So 'PrintAST nat' will not output anything.
 
- 3. Building sort outputs "Sort Prop", "Sort Set", or "Sort Type"
-    Useful to implement 4
-
- 4. Provides the option to only print Propositions -- uncomment in build_const defintion
-
- 5. Some substitutions:
+ 3. Some substitutions:
     Inductive type constructors: (Construct nat 1) -> S
     Removal of Name constructor: (Name "foo") -> "foo"
 
