@@ -70,8 +70,6 @@ You can change the depth at which the plugin prints definitions:
     Coq < PrintAST le with depth 1.
     (Inductive ((Name le) (inductive_body (le_n 1 (Prod (Name n) (Inductive ((Name nat) (inductive_body (O 1 (Rel 1)) (S 2 (Prod (Anonymous) (Rel 1) (Rel 2)))))) (App (Rel 2) (Rel 1) (Rel 1)))) (le_S 2 (Prod (Name n) (Inductive ((Name nat) (inductive_body (O 1 (Rel 1)) (S 2 (Prod (Anonymous) (Rel 1) (Rel 2)))))) (Prod (Name m) (Inductive ((Name nat) (inductive_body (O 1 (Rel 1)) (S 2 (Prod (Anonymous) (Rel 1) (Rel 2)))))) (Prod (Anonymous) (App (Rel 3) (Rel 2) (Rel 1)) (App (Rel 4) (Rel 3) (App (Construct (Inductive ((Name nat) (inductive_body (O 1 (Rel 1)) (S 2 (Prod (Anonymous) (Rel 1) (Rel 2)))))) 2) (Rel 2))))))))))
 
-The default depth is 0. If the argument is a constant or inductive type, the plugin always unfolds it.
-
 ## Modifying the Command
 
 To modify the top-level behavior, change the `VERNAC COMMAND EXTEND` block of code at the end of the file.
